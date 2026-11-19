@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tohsaka-rin"
+version = "1.0.1"
+description = "Sketch of Rin"
+readme = { file = "README.md", content-type = "text/markdown; charset=UTF-8" }
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["tohsaka-rin", "sketch", "canvas"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/xh10032/kenageya"
+Repository = "https://github.com/xh10032/kenageya"
+Issues = "https://github.com/xh10032/kenageya/issues"
+
+[project.scripts]
+tohsaka-rin = "tohsaka_rin:main"
+
+[tool.setuptools]
+packages = ["tohsaka_rin"]
+
+[tool.setuptools.package-data]
+tohsaka_rin = ["index.html"]
+

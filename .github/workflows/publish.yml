@@ -1,0 +1,74 @@
+name: Manual Package Release (npm & PyPI OIDC Provenance)
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: '1. 选择要发布的子包目录名 (对应 npm/包名 与 pypi/包名)'
+        required: true
+        default: 'tohsaka-rin'
+        type: choice
+        options:
+          - tohsaka-rin
+      target:
+        description: '2. 选择发布目标平台 (防单边报错重跑撞车，可单独补发某一边)'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - npm-only
+          - pypi-only
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish-npm:
+    if: ${{ inputs.target == 'both' || inputs.target == 'npm-only' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: npm/${{ inputs.package }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Check version & publish with Sigstore Provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VER=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VER}" version >/dev/null 2>&1; then
+            echo "[Skip] ${PKG_NAME}@${PKG_VER} 已在 npm 线上存在，自动跳过以防重跑撞版本号报错！"
+          else
+            npm publish --provenance --access public
+          fi
+
+  publish-pypi:
+    if: ${{ inputs.target == 'both' || inputs.target == 'pypi-only' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build Wheel and sdist
+        working-directory: pypi/${{ inputs.package }}
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Publish to PyPI via OIDC Trusted Publishing (PEP 740 Attestations)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pypi/${{ inputs.package }}/dist/
+          skip-existing: true

@@ -1,0 +1,32 @@
+{
+  "name": "tohsaka-rin",
+  "version": "1.0.1",
+  "description": "Sketch of Rin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xh10032/kenageya.git",
+    "directory": "npm/tohsaka-rin"
+  },
+  "homepage": "https://github.com/xh10032/kenageya#readme",
+  "bugs": {
+    "url": "https://github.com/xh10032/kenageya/issues"
+  },
+  "bin": {
+    "tohsaka-rin": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "index.html"
+  ],
+  "main": "cli.js",
+  "keywords": [
+    "tohsaka-rin",
+    "sketch",
+    "canvas"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
+

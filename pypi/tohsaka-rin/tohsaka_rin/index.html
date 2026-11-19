@@ -1,0 +1,1220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sketch</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #E5DDD0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    touch-action: none;
+  }
+  #ui {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
+    z-index: 20;
+  }
+  #ui.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: rgba(44, 38, 35, 0.78);
+    color: #F3EFE6;
+    font: 12px system-ui, sans-serif;
+    letter-spacing: 0.03em;
+    border: none;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    transition: background 0.15s;
+  }
+  .btn:hover {
+    background: rgba(44, 38, 35, 0.95);
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="2400" height="1792"></canvas>
+<div id="ui">
+  <button id="rp" class="btn">重播</button>
+</div>
+<script>
+let audioCtx = null;
+let masterGain = null;
+let idleFilter = null;
+let idleGain = null;
+let dragOsc = null;
+let dragSubOsc = null;
+let dragFilter = null;
+let dragGain = null;
+let dragNoiseFilter = null;
+let dragNoiseGain = null;
+let springOsc = null;
+let springOvOsc = null;
+let springFilter = null;
+let springGain = null;
+let springOvGain = null;
+let prevIdleStep = -1;
+let prevIdleType = null;
+let prevDrag = false;
+
+function initAudio() {
+  if (audioCtx) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return;
+  }
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  audioCtx = new AudioCtx();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 1;
+  const convolver = audioCtx.createConvolver();
+  const irLen = Math.floor(audioCtx.sampleRate * 0.28);
+  const irBuf = audioCtx.createBuffer(2, irLen, audioCtx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = irBuf.getChannelData(ch);
+    for (let i = 0; i < irLen; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / irLen, 3.6) * 0.15;
+    }
+  }
+  convolver.buffer = irBuf;
+  const dryGain = audioCtx.createGain();
+  const wetGain = audioCtx.createGain();
+  dryGain.gain.value = 0.88;
+  wetGain.gain.value = 0.18;
+  masterGain.connect(dryGain);
+  masterGain.connect(convolver);
+  convolver.connect(wetGain);
+  dryGain.connect(audioCtx.destination);
+  wetGain.connect(audioCtx.destination);
+  const bufLen = audioCtx.sampleRate * 4;
+  const noiseBuf = audioCtx.createBuffer(1, bufLen, audioCtx.sampleRate);
+  const pinkOut = noiseBuf.getChannelData(0);
+  const brownBuf = audioCtx.createBuffer(1, bufLen, audioCtx.sampleRate);
+  const brownOut = brownBuf.getChannelData(0);
+  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+  let lastBrown = 0;
+  for (let i = 0; i < bufLen; i++) {
+    const white = Math.random() * 2 - 1;
+    const grain = 0.85 + 0.15 * Math.sin(i * 0.008) * Math.cos(i * 0.0023);
+    b0 = 0.99886 * b0 + white * 0.0555179;
+    b1 = 0.99332 * b1 + white * 0.0750759;
+    b2 = 0.96900 * b2 + white * 0.1538520;
+    b3 = 0.86650 * b3 + white * 0.3104856;
+    b4 = 0.55000 * b4 + white * 0.5329522;
+    b5 = -0.7616 * b5 - white * 0.0168980;
+    pinkOut[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.045 * grain;
+    b6 = white * 0.115926;
+    lastBrown = (lastBrown + 0.02 * white) / 1.02;
+    brownOut[i] = lastBrown * 1.8 * grain;
+  }
+  dragOsc = audioCtx.createOscillator();
+  dragOsc.type = 'sine';
+  dragOsc.frequency.value = 160;
+  dragSubOsc = audioCtx.createOscillator();
+  dragSubOsc.type = 'triangle';
+  dragSubOsc.frequency.value = 320;
+  const dragSubGain = audioCtx.createGain();
+  dragSubGain.gain.value = 0.25;
+  dragFilter = audioCtx.createBiquadFilter();
+  dragFilter.type = 'lowpass';
+  dragFilter.frequency.value = 420;
+  dragFilter.Q.value = 1.4;
+  dragGain = audioCtx.createGain();
+  dragGain.gain.value = 0;
+  dragOsc.connect(dragFilter);
+  dragSubOsc.connect(dragSubGain);
+  dragSubGain.connect(dragFilter);
+  dragFilter.connect(dragGain);
+  dragGain.connect(masterGain);
+  dragOsc.start();
+  dragSubOsc.start();
+  const dragNoiseSrc = audioCtx.createBufferSource();
+  dragNoiseSrc.buffer = noiseBuf;
+  dragNoiseSrc.loop = true;
+  dragNoiseFilter = audioCtx.createBiquadFilter();
+  dragNoiseFilter.type = 'bandpass';
+  dragNoiseFilter.frequency.value = 680;
+  dragNoiseFilter.Q.value = 2.2;
+  dragNoiseGain = audioCtx.createGain();
+  dragNoiseGain.gain.value = 0;
+  dragNoiseSrc.connect(dragNoiseFilter);
+  dragNoiseFilter.connect(dragNoiseGain);
+  dragNoiseGain.connect(masterGain);
+  dragNoiseSrc.start();
+  springOsc = audioCtx.createOscillator();
+  springOsc.type = 'sine';
+  springOsc.frequency.value = 195;
+  springOvOsc = audioCtx.createOscillator();
+  springOvOsc.type = 'sine';
+  springOvOsc.frequency.value = 585;
+  springFilter = audioCtx.createBiquadFilter();
+  springFilter.type = 'bandpass';
+  springFilter.frequency.value = 720;
+  springFilter.Q.value = 1.2;
+  springGain = audioCtx.createGain();
+  springGain.gain.value = 0;
+  springOvGain = audioCtx.createGain();
+  springOvGain.gain.value = 0;
+  springOsc.connect(springFilter);
+  springOvOsc.connect(springOvGain);
+  springOvGain.connect(springFilter);
+  springFilter.connect(springGain);
+  springGain.connect(masterGain);
+  springOsc.start();
+  springOvOsc.start();
+  const idleSrc = audioCtx.createBufferSource();
+  idleSrc.buffer = brownBuf;
+  idleSrc.loop = true;
+  idleFilter = audioCtx.createBiquadFilter();
+  idleFilter.type = 'bandpass';
+  idleFilter.frequency.value = 340;
+  idleFilter.Q.value = 1.6;
+  idleGain = audioCtx.createGain();
+  idleGain.gain.value = 0;
+  idleSrc.connect(idleFilter);
+  idleFilter.connect(idleGain);
+  idleGain.connect(masterGain);
+  idleSrc.start();
+}
+
+window.addEventListener('pointerdown', initAudio, { passive: true });
+window.addEventListener('keydown', initAudio, { passive: true });
+
+function trigPlushCoo(freq, isUp, gainVal) {
+  if (!audioCtx || !masterGain) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const filter = audioCtx.createBiquadFilter();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  if (isUp) {
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(freq * 1.28, now + 0.065);
+    osc.frequency.exponentialRampToValueAtTime(freq * 1.08, now + 0.135);
+  } else {
+    osc.frequency.setValueAtTime(freq * 1.16, now);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.91, now + 0.08);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.98, now + 0.14);
+  }
+  filter.type = 'lowpass';
+  filter.frequency.value = 1150;
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(gainVal * 0.14, now + 0.024);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.145);
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+  osc.start(now);
+  osc.stop(now + 0.155);
+}
+
+function trigSqueak(freq, gainVal) {
+  if (!audioCtx || !masterGain) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(freq, now);
+  osc.frequency.exponentialRampToValueAtTime(freq * 1.42, now + 0.035);
+  osc.frequency.exponentialRampToValueAtTime(freq * 1.1, now + 0.065);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(gainVal * 0.15, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.07);
+  osc.connect(gain);
+  gain.connect(masterGain);
+  osc.start(now);
+  osc.stop(now + 0.075);
+}
+
+function trigGrab(f0, f1, vol) {
+  if (!audioCtx || !masterGain) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(f0, now);
+  osc.frequency.exponentialRampToValueAtTime(f1, now + 0.055);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(0.08 * vol, now + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+  osc.connect(gain);
+  gain.connect(masterGain);
+  osc.start(now);
+  osc.stop(now + 0.065);
+}
+
+function updateAudioFrame(currentProg) {
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const now = audioCtx.currentTime;
+  const springActive = !dragging && (Math.abs(ox) > 0.5 || Math.abs(oy) > 0.5 || Math.abs(vx) > 0.5 || Math.abs(vy) > 0.5);
+  if (currentProg >= 1 && !dragging && !springActive && idleAct) {
+    const ip = Math.max(0, Math.min(0.9999, idleAct.t / idleAct.dur));
+    if (idleAct.type === 'roll') {
+      const loops = Math.max(1, idleAct.loops);
+      const stepIdx = Math.floor(ip * loops * 7);
+      const ang = ip * Math.PI * 2 * loops;
+      const env = Math.sin(ip * Math.PI);
+      const hn = Math.sin(ang);
+      const w = 0.5 + 0.5 * hn;
+      const cw = 0.5 + 0.5 * Math.cos(ang);
+      idleFilter.frequency.setTargetAtTime(380 + w * 160, now, 0.04);
+      idleGain.gain.setTargetAtTime(env * 0.018 * 0.663, now, 0.04);
+      if (stepIdx !== prevIdleStep || prevIdleType !== 'roll') {
+        prevIdleStep = stepIdx;
+        prevIdleType = 'roll';
+        const stepGain = Math.max(0.25, env) * 0.663;
+        trigPlushCoo(465 + hn * 85, stepIdx % 2 === 0, stepGain * 0.3);
+      }
+    } else {
+      idleGain.gain.setTargetAtTime(0, now, 0.02);
+      const totalClicks = Math.max(2, idleAct.swings * 2);
+      const clickIdx = Math.floor(ip * totalClicks);
+      if (clickIdx !== prevIdleStep || prevIdleType !== 'twirl') {
+        prevIdleStep = clickIdx;
+        prevIdleType = 'twirl';
+        const isUp = clickIdx % 2 === 0;
+        trigSqueak(isUp ? 540 : 620, 0.155);
+      }
+    }
+  } else {
+    idleGain.gain.setTargetAtTime(0, now, 0.03);
+    prevIdleStep = -1;
+    prevIdleType = null;
+  }
+  const dragDist = Math.hypot(ox, oy);
+  if (dragging) {
+    if (!prevDrag) {
+      prevDrag = true;
+      trigGrab(155, 92, 0.722);
+    }
+    const tension = Math.min(1, dragDist / 220);
+    const motion = Math.min(1, dragVel / 3.2);
+    dragOsc.frequency.setTargetAtTime(145 + tension * 155, now, 0.02);
+    dragSubOsc.frequency.setTargetAtTime(290 + tension * 310, now, 0.02);
+    dragFilter.frequency.setTargetAtTime(340 + tension * 320, now, 0.02);
+    dragGain.gain.setTargetAtTime(motion * (0.035 + tension * 0.07) * 0.722, now, 0.02);
+    dragNoiseFilter.frequency.setTargetAtTime(520 + tension * 480, now, 0.02);
+    dragNoiseGain.gain.setTargetAtTime(motion * 0.045 * 0.722, now, 0.02);
+  } else {
+    prevDrag = false;
+    dragGain.gain.setTargetAtTime(0, now, 0.025);
+    dragNoiseGain.gain.setTargetAtTime(0, now, 0.025);
+  }
+  if (springActive) {
+    const velMag = Math.hypot(vx, vy);
+    const energy = Math.min(1, (velMag * 2.2 + dragDist * 0.4) / 95);
+    const wobble = (ox - oy) * 0.48;
+    const baseFreq = Math.max(160, Math.min(440, 285 + wobble * 1.35));
+    springOsc.frequency.setTargetAtTime(baseFreq, now, 0.01);
+    springOvOsc.frequency.setTargetAtTime(baseFreq * 2.02, now, 0.01);
+    springFilter.type = 'lowpass';
+    springFilter.frequency.setTargetAtTime(1100, now, 0.015);
+    springOvGain.gain.setTargetAtTime(0.35, now, 0.015);
+    springGain.gain.setTargetAtTime(energy * 0.11 * 0.722, now, 0.012);
+  } else {
+    springGain.gain.setTargetAtTime(0, now, 0.025);
+  }
+}
+
+const STROKES = [
+  "M950 568c-28 128-110 192-42 235q253 165 462-20c133-15 82-249 10-125q29-47-18-26q33-74 4-77",
+  "M858 596q99-4 191-17",
+  "M1168 568q108-3 188-16",
+  "M872 670l190-28q-109 45-191 43",
+  "M1079 652l-209 57c62-16 116 7 190-18",
+  "M1071 670q-131 36-195 50",
+  "M1145 637l191-15l-181 27l176-12",
+  "M1157 666q368-32-4 22",
+  "M1264 739c88-49-29 31 62 18",
+  "M1409 721q3-21-20-37q13-17 38-18",
+  "M861 587c-36-32 61-236 100-244q43 46 63 23c51 43 65-9 123 3",
+  "M1185 362q55-7 100 8",
+  "M885 598c-41-11 34-174 39-169q-48 119-20 177c50-113 36-26 108 24c36-132 28-51 41-52c45-305 66-101 79-120",
+  "M1087 433l22 29",
+  "M1079 453l19 18",
+  "M1148 609q-47-142 21-260c154 157 85-141 197 228q-35-20-52-33q-51 15-62 59c-99-39-52-115-104 6",
+  "M878 466q-213-102 33-69",
+  "M990 363q110-187 82 19",
+  "M878 466q-35-7-57 37q-104 273-226 467c-34 39 72 66 61 98q11 21-101 123q-12 12 27 49l64-53l17 30q-93 99-50 86",
+  "M639 1315q-82 41 55-103q-30-17 18-95c-1-132 132-214 184-325",
+  "M1462 555c-32-8-116 114-27-104l-90 32c-62-171-130-188 96-70c134-216 113-149 111 11",
+  "M1548 425q47 30 66 111q63 247 166 480q-103 108-13 144l9 49c-72-33-27 2-122 0c-82-1 71-78-7-133c-184-150-155-421-208-633q-21-16 9-33q60-11 100 15",
+  "M1798 1249q-79 27-118 92l-13-12q105-182 131-80",
+  "M1791 1252l-3 51",
+  "M1494 769q14 162 82 269q-4 15-47 68c-34 48 76 42 11 99",
+  "M1526 1142q-15 61-73 77c42-68-52-87-58-131",
+  "M998 853q-7 65 13 103",
+  "M1183 904c-104 44-146 12-296 148q-29 19 55 84q55 27-42 78c57 15 174-28 67-56",
+  "M1068 945c7-65 39 3 49-62q137-19 204-17c-24 126 43 38 117 401q-54-4-99 13l-65-224",
+  "M1010 1114c-36-50-63-13 11-70q-7 79-14 174q52 60 117 92q96-44 187-109",
+  "M1272 903c89 19 32 41 3 103",
+  "M1432 1270q-27 191-82 8",
+  "M1097 983q-122 45-8 27q-28 129 35-4q102-58 3-25q21-95-30 2",
+  "M1015 1235l-53 151c103-9-65 64 131 36c-2 40 137-21 146 11c113-62 102-17 124-54q60 43 48-16",
+  "M1041 1259l-34 128",
+  "M1094 1298l-13 92",
+  "M1145 1301l2 95",
+  "M1195 1324l15 68",
+  "M1213 1268l21 131",
+  "M1245 1261l35 93",
+  "M1281 1223l57 152",
+  "M1125 1438l-19 28",
+  "M1106 1466q-44-43-107-50q-106 431 108 48",
+  "M1347 1399l-2 42",
+  "M1345 1441l-120-31q110 422 122 30",
+  "M944 829q-98 88-57 102l88-82"
+];
+
+const FILL_SHAPES = [
+  {
+    "fill": "#3e3633",
+    "cx": 1064,
+    "cy": 832,
+    "r": 870,
+    "lw": 7,
+    "d": "M1395 1088c6 44 100 63 58 131q58-16 73-77-6-18 3-36 43-53 47-68-68-107-82-269l-59-318-150-81q-45-15-100-8l-255 45-52 59q-35-7-57 37-104 273-226 467c-34 39 72 66 61 98q11 21-101 123-12 12 27 49l64-53 17 30q-93 99-50 86 18-25 81-91-30-17 18-95c-1-132 132-214 184-325l54-72 48 133q-7 65 13 103"
+  },
+  {
+    "fill": "#2c2e3b",
+    "cx": 1167,
+    "cy": 428,
+    "r": 659,
+    "lw": 7,
+    "d": "M878 466q-213-102 33-69m160-7q32-226-90-12m481 177c-32-8-116 114-27-104m0 0-90 32c-62-171-130-188 96-70 134-216 113-149 111 11"
+  },
+  {
+    "fill": "#fee6ca",
+    "cx": 1197,
+    "cy": 1433,
+    "r": 256,
+    "lw": 1.5,
+    "d": "M1125 1438l-19 28q-27-27-60-39 35-20 79 11m222-39-2 42-76-20q49-22 78-22"
+  },
+  {
+    "fill": "#3e3633",
+    "cx": 1155,
+    "cy": 1527,
+    "r": 326,
+    "lw": 7,
+    "d": "M1106 1466q-44-43-107-50-106 431 108 48m238-23-120-31q110 422 122 30"
+  },
+  {
+    "fill": "#312e29",
+    "cx": 1187,
+    "cy": 1318,
+    "r": 383,
+    "lw": 7,
+    "d": "M1411 1363q12 59-48 16c-22 37-11-8-124 54-9-32-148 29-146-11-196 28-28-45-131-36l53-151 316-35"
+  },
+  {
+    "fill": "#fee6ca",
+    "cx": 1167,
+    "cy": 909,
+    "r": 780,
+    "lw": 1.5,
+    "kind": "face",
+    "d": "M942 1136q55 27-42 78c57 15 174-28 67-56m399-603q29 3-4 77 47-21 18 26c72-124 123 110-10 125q-209 185-462 20c-68-43 14-107 42-235l127-118m273 828q55 183 82-8"
+  },
+  {
+    "fill": "#bc2125",
+    "cx": 1159,
+    "cy": 1088,
+    "r": 475,
+    "lw": 1.5,
+    "d": "M1183 904c-104 44-146 12-296 148q-29 19 55 84l19 24q38 7 51 20l-2-66c-36-50-63-13 11-70q-7 79-14 174 52 60 117 92 96-44 187-109l-37-145 65 224q45-17 99-13c-74-363-141-275-117-401q-67-2-204 17c-10 65-42-3-49 62"
+  },
+  {
+    "fill": "#ecebe9",
+    "cx": 1025,
+    "cy": 951,
+    "r": 256,
+    "lw": 1.5,
+    "kind": "stick",
+    "d": "M944 829q-98 88-57 102l88-82m122 134q-122 45-8 27-28 129 35-4 102-58 3-25 21-95-30 2"
+  },
+  {
+    "fill": "#3e3633",
+    "cx": 1326,
+    "cy": 842,
+    "r": 848,
+    "lw": 7,
+    "d": "M1147 369c-58-12-72 40-123-3q-20 23-63-23c-39 8-136 212-100 244l24 11c-41-11 34-174 39-169q-48 119-20 177c50-113 36-26 108 24 36-132 28-51 41-52 45-305 66-101 79-120m16 151q-47-142 21-260c154 157 85-141 197 228q-35-20-52-33-51 15-62 59c-99-39-52-115-104 6m628 600-9-49q-90-36 13-144-103-233-166-480-35-149-166-126-30 17-9 33c53 212 24 483 208 633 78 55-75 132 7 133 95 2 50-33 122 0m22 40q-26-102-131 80l13 12q39-65 118-92"
+  }
+];
+
+const COLOR_STOPS = {
+  "#3e3633": [
+    "#463e3b",
+    "#413936",
+    "#3e3633",
+    "#3a322f",
+    "#342c29"
+  ],
+  "#2c2e3b": [
+    "#343643",
+    "#2f313e",
+    "#2c2e3b",
+    "#282a37",
+    "#222431"
+  ],
+  "#fee6ca": [
+    "#ffeed2",
+    "#ffe9cd",
+    "#fee6ca",
+    "#fae2c6",
+    "#f4dcc0"
+  ],
+  "#312e29": [
+    "#393631",
+    "#34312c",
+    "#312e29",
+    "#2d2a25",
+    "#27241f"
+  ],
+  "#bc2125": [
+    "#c4292d",
+    "#bf2428",
+    "#bc2125",
+    "#b81d21",
+    "#b2171b"
+  ],
+  "#ecebe9": [
+    "#f4f3f1",
+    "#efeeec",
+    "#ecebe9",
+    "#e8e7e5",
+    "#e2e1df"
+  ]
+};
+
+function tokenizePath(pathStr) {
+  const tokens = [];
+  const regex = /([a-zA-Z])|([-+]?(?:\d+\.?\d*|\.\d+))/g;
+  let match = regex.exec(pathStr);
+  while (match !== null) {
+    tokens.push(match[1] ? match[1] : parseFloat(match[2]));
+    match = regex.exec(pathStr);
+  }
+  return tokens;
+}
+
+function sampleStroke(pathStr, step = 5, strokeIdx = -1) {
+  const tokens = tokenizePath(pathStr);
+  const rawPts = [];
+  let totalDist = 0;
+
+  function pushPoint(x, y) {
+    if (rawPts.length === 0) {
+      rawPts.push({ x, y, dist: 0 });
+      return;
+    }
+    const prev = rawPts[rawPts.length - 1];
+    const segDist = Math.hypot(x - prev.x, y - prev.y);
+    if (segDist > 0.25) {
+      totalDist += segDist;
+      rawPts.push({ x, y, dist: totalDist });
+    }
+  }
+
+  let i = 0;
+  let cmd = '';
+  let cx = 0;
+  let cy = 0;
+
+  while (i < tokens.length) {
+    if (typeof tokens[i] === 'string') {
+      cmd = tokens[i++];
+    }
+    const isRel = cmd === cmd.toLowerCase();
+    const upper = cmd.toUpperCase();
+
+    if (upper === 'M') {
+      const rx = Number(tokens[i++]);
+      const ry = Number(tokens[i++]);
+      cx = isRel ? cx + rx : rx;
+      cy = isRel ? cy + ry : ry;
+      pushPoint(cx, cy);
+      cmd = isRel ? 'l' : 'L';
+    } else if (upper === 'L') {
+      const x0 = cx;
+      const y0 = cy;
+      const dx = Number(tokens[i++]);
+      const dy = Number(tokens[i++]);
+      cx = isRel ? cx + dx : dx;
+      cy = isRel ? cy + dy : dy;
+      const steps = Math.max(4, Math.ceil(Math.hypot(cx - x0, cy - y0) / step));
+      for (let k = 1; k <= steps; k++) {
+        const t = k / steps;
+        pushPoint(x0 + (cx - x0) * t, y0 + (cy - y0) * t);
+      }
+    } else if (upper === 'Q') {
+      const x0 = cx;
+      const y0 = cy;
+      const qxVal = Number(tokens[i++]);
+      const qyVal = Number(tokens[i++]);
+      const xVal = Number(tokens[i++]);
+      const yVal = Number(tokens[i++]);
+      const qx = isRel ? cx + qxVal : qxVal;
+      const qy = isRel ? cy + qyVal : qyVal;
+      const x = isRel ? cx + xVal : xVal;
+      const y = isRel ? cy + yVal : yVal;
+      cx = x;
+      cy = y;
+      const approxLen = Math.hypot(qx - x0, qy - y0) + Math.hypot(x - qx, y - qy);
+      const steps = Math.max(4, Math.min(80, Math.ceil(approxLen / step)));
+      for (let k = 1; k <= steps; k++) {
+        const t = k / steps;
+        const inv = 1 - t;
+        pushPoint(
+          inv * inv * x0 + 2 * inv * t * qx + t * t * x,
+          inv * inv * y0 + 2 * inv * t * qy + t * t * y
+        );
+      }
+    } else if (upper === 'C') {
+      const x0 = cx;
+      const y0 = cy;
+      const c1xVal = Number(tokens[i++]);
+      const c1yVal = Number(tokens[i++]);
+      const c2xVal = Number(tokens[i++]);
+      const c2yVal = Number(tokens[i++]);
+      const xVal = Number(tokens[i++]);
+      const yVal = Number(tokens[i++]);
+      const c1x = isRel ? cx + c1xVal : c1xVal;
+      const c1y = isRel ? cy + c1yVal : c1yVal;
+      const c2x = isRel ? cx + c2xVal : c2xVal;
+      const c2y = isRel ? cy + c2yVal : c2yVal;
+      const x = isRel ? cx + xVal : xVal;
+      const y = isRel ? cy + yVal : yVal;
+      cx = x;
+      cy = y;
+      const approxLen =
+        Math.hypot(c1x - x0, c1y - y0) +
+        Math.hypot(c2x - c1x, c2y - c1y) +
+        Math.hypot(x - c2x, y - c2y);
+      const steps = Math.max(4, Math.min(80, Math.ceil(approxLen / step)));
+      for (let k = 1; k <= steps; k++) {
+        const t = k / steps;
+        const inv = 1 - t;
+        pushPoint(
+          inv * inv * inv * x0 + 3 * inv * inv * t * c1x + 3 * inv * t * t * c2x + t * t * t * x,
+          inv * inv * inv * y0 + 3 * inv * inv * t * c1y + 3 * inv * t * t * c2y + t * t * t * y
+        );
+      }
+    } else {
+      i++;
+    }
+  }
+
+  const count = rawPts.length;
+  const rawPressure = new Float32Array(count);
+  const isThigh = strokeIdx === 41 || strokeIdx === 43;
+  const isBridge = strokeIdx === 11 || strokeIdx === 26;
+  const isLoop = strokeIdx === 20 || strokeIdx === 21 || strokeIdx === 42 || strokeIdx === 44;
+  const lenScale = Math.min(1, Math.max(0.25, (totalDist - 50) / 220));
+
+  for (let k = 0; k < count; k++) {
+    const p = totalDist > 0 ? rawPts[k].dist / totalDist : k / Math.max(1, count - 1);
+    if (isThigh) {
+      rawPressure[k] = 0.2 + 0.05 * Math.sin(p * Math.PI);
+      continue;
+    }
+    if (isBridge) {
+      rawPressure[k] = 0.46 + 0.04 * Math.sin(p * Math.PI);
+      continue;
+    }
+    const prev = rawPts[Math.max(0, k - 1)];
+    const curr = rawPts[k];
+    const next = rawPts[Math.min(count - 1, k + 1)];
+    const angle = Math.atan2(next.y - prev.y, next.x - prev.x);
+    let curvature = 0;
+    if (k > 0 && k < count - 1) {
+      const a1 = Math.atan2(next.y - curr.y, next.x - curr.x);
+      const a0 = Math.atan2(curr.y - prev.y, curr.x - prev.x);
+      let diff = Math.abs(a1 - a0);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
+      curvature = Math.min(1, diff / (Math.PI * 0.35));
+    }
+    const minEnd = isLoop ? 0.65 : 0.46 - 0.26 * lenScale;
+    const e0 = Math.max(minEnd, Math.pow(Math.min(1, p / 0.18), 0.68));
+    const e1 = Math.max(minEnd, Math.pow(Math.min(1, (1 - p) / 0.2), 0.72));
+    const taper = Math.min(e0, e1);
+    const bellyAmp = (isLoop ? 0.14 : 0.18) * lenScale;
+    const belly = 1 - bellyAmp + bellyAmp * Math.sin(p * Math.PI);
+    const nibBias = 0.82 + 0.18 * Math.abs(Math.sin(angle - 0.6));
+    const val = (0.12 + 0.72 * taper) * belly * nibBias * (1 + curvature * 0.12);
+    rawPressure[k] = Math.max(0.08, Math.min(0.78, val));
+  }
+
+  const points = rawPts.map((pt, k) => {
+    let sum = 0;
+    let samples = 0;
+    const start = Math.max(0, k - 2);
+    const end = Math.min(count - 1, k + 2);
+    for (let j = start; j <= end; j++) {
+      sum += rawPressure[j];
+      samples++;
+    }
+    return { x: pt.x, y: pt.y, pressure: sum / samples };
+  });
+
+  return { points, length: Math.max(1, Math.round(totalDist)) };
+}
+
+const sampledStrokes = STROKES.map((d, idx) => sampleStroke(d, 5, idx));
+const mainStrokeLen = sampledStrokes.slice(0, -1).reduce((acc, s) => acc + s.length, 0);
+let accumLen = 0;
+const strokes = sampledStrokes.map((s, idx) => {
+  if (idx === sampledStrokes.length - 1) {
+    return { ...s, s0: 0.945, s1: 1 };
+  }
+  const s0 = (accumLen / mainStrokeLen) * 0.84;
+  accumLen += s.length;
+  const s1 = (accumLen / mainStrokeLen) * 0.84;
+  return { ...s, s0, s1 };
+});
+
+const STICK_PIVOT_X = 955;
+const STICK_PIVOT_Y = 822;
+let ox = 0;
+let oy = 0;
+let vx = 0;
+let vy = 0;
+let ix = 0;
+let iy = 0;
+let iRot = 0;
+let dragging = false;
+let dragStart = null;
+let rafId = 0;
+let lastDragX = 0;
+let lastDragY = 0;
+let dragVel = 0;
+let idleAct = null;
+let idlePause = 0.9;
+
+function pickRandomAction() {
+  if (Math.random() < 0.52) {
+    const loops = Math.random() < 0.65 ? 1 : 2;
+    const dur = loops * (2.2 + Math.random() * 0.65);
+    const amp = 0.85 + Math.random() * 0.35;
+    idleAct = { type: 'roll', t: 0, dur, loops, amp, swings: 1 };
+  } else {
+    const swings = Math.random() < 0.6 ? 2 : 3;
+    const dur = swings * (0.52 + Math.random() * 0.14);
+    const amp = 0.85 + Math.random() * 0.35;
+    idleAct = { type: 'twirl', t: 0, dur, swings, amp, loops: 1 };
+  }
+}
+
+function stepIdle(dt) {
+  let tx = 0;
+  let ty = 0;
+  let rot = 0;
+  if (!idleAct) {
+    idlePause -= dt;
+    if (idlePause <= 0) pickRandomAction();
+  } else {
+    idleAct.t += dt;
+    const p = idleAct.t / idleAct.dur;
+    if (p >= 1) {
+      idleAct = null;
+      idlePause = 1.1 + Math.random() * 2.1;
+    } else {
+      const env = Math.sin(p * Math.PI);
+      const a = idleAct.amp * env;
+      if (idleAct.type === 'roll') {
+        const ang = p * Math.PI * 2 * idleAct.loops;
+        tx = (-9 - 12 * Math.sin(ang)) * a;
+        ty = (10 + 13 * Math.cos(ang)) * a;
+        rot = (-0.03 + 0.075 * Math.cos(ang - 0.15)) * a;
+      } else {
+        const ph = p * Math.PI * 2 * idleAct.swings;
+        const cheekWave = Math.sin(ph);
+        const stickWave = Math.sin(ph - 0.18);
+        tx = (-5 - 5.5 * cheekWave) * a;
+        ty = (6 + 7.5 * cheekWave) * a;
+        rot = 0.2 * stickWave * a;
+      }
+    }
+  }
+  ix += (tx - ix) * 0.22;
+  iy += (ty - iy) * 0.22;
+  iRot += (rot - iRot) * 0.16;
+}
+
+function deformPoint(x, y, scale = 1) {
+  if (y < 620 || y > 950 || x < 720 || x > 1390) {
+    return { x, y };
+  }
+  const txOff = ox + ix;
+  const tyOff = oy + iy;
+  let wy = 1;
+  if (y < 775) {
+    const ty = (y - 620) / 155;
+    wy = ty * ty * (3 - 2 * ty);
+  } else if (y > 865) {
+    const ty = (950 - y) / 85;
+    wy = ty * ty * (3 - 2 * ty);
+  }
+  let wx = 0;
+  let belly = 0;
+  if (x <= 908) {
+    const tx = (x - 720) / 188;
+    wx = tx * tx * (3 - 2 * tx);
+  } else {
+    const u = (x - 908) / 467;
+    if (u < 1) {
+      wx = (1 - u) + 0.32 * u * (1 - u);
+      belly = 4 * u * (1 - u) * (1 - 0.25 * u);
+    }
+  }
+  const w = wx * wy * scale;
+  const b = belly * wy * scale;
+  const pull = Math.max(0, -txOff * 0.48) + Math.max(0, tyOff * 0.52);
+  return {
+    x: x + txOff * w + pull * b * 0.18,
+    y: y + tyOff * w + pull * b * 0.58
+  };
+}
+
+function getStickShift() {
+  const pt = deformPoint(935, 830);
+  return { x: pt.x - 935, y: pt.y - 830 };
+}
+
+function transformStickPoint(x, y, shift) {
+  const cosA = Math.cos(iRot);
+  const sinA = Math.sin(iRot);
+  const dx = x - STICK_PIVOT_X;
+  const dy = y - STICK_PIVOT_Y;
+  return {
+    x: STICK_PIVOT_X + shift.x + dx * cosA - dy * sinA,
+    y: STICK_PIVOT_Y + shift.y + dx * sinA + dy * cosA
+  };
+}
+
+function softMapOffset(dx, dy) {
+  const r = Math.hypot(dx, dy);
+  if (r < 0.001) return { x: 0, y: 0 };
+  const ux = dx / r;
+  const uy = dy / r;
+  const dot = ux * (-0.52) + uy * 0.85;
+  const t = Math.pow((dot + 1) * 0.5, 1.15);
+  const scale = 16 + 314 * t;
+  const mappedR = scale * (1 - 1 / Math.pow(1 + r / (scale * 0.78), 0.85));
+  return { x: ux * mappedR, y: uy * mappedR };
+}
+
+const HANDS_PATH = new Path2D('M942 1136q55 27-42 78c57 15 174-28 67-56M1350 1278q55 183 82-8');
+const STICK_PATH = new Path2D('M944 829q-98 88-57 102l88-82');
+const CROSS_PATH = new Path2D('M1097 983q-122 45-8 27-28 129 35-4 102-58 3-25 21-95-30 2');
+const SKIRT_CLIP = new Path2D('M0 0H2400V1792H0ZM1411 1363q12 59-48 16c-22 37-11-8-124 54-9-32-148 29-146-11-196 28-28-45-131-36l53-151 316-35Z');
+
+function getFacePolygon() {
+  const path = new Path2D();
+  const pts = strokes[0].points;
+  path.moveTo(1341, 533);
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const dp = deformPoint(pts[i].x, pts[i].y);
+    path.lineTo(dp.x, dp.y);
+  }
+  path.lineTo(1077, 450);
+  path.closePath();
+  return path;
+}
+
+const colorBuffer = document.createElement('canvas');
+colorBuffer.width = 2400;
+colorBuffer.height = 1792;
+const bufferCtx = colorBuffer.getContext('2d');
+bufferCtx.lineJoin = 'round';
+bufferCtx.lineCap = 'round';
+
+let faceGrad = null;
+let stickGrad = null;
+const fillItems = FILL_SHAPES.map((item) => {
+  const stops = COLOR_STOPS[item.fill];
+  const grad = bufferCtx.createRadialGradient(
+    item.cx - item.r * 0.18,
+    item.cy - item.r * 0.2,
+    item.r * 0.05,
+    item.cx + item.r * 0.05,
+    item.cy + item.r * 0.06,
+    item.r
+  );
+  grad.addColorStop(0, stops[0]);
+  grad.addColorStop(0.28, stops[1]);
+  grad.addColorStop(0.55, stops[2]);
+  grad.addColorStop(0.78, stops[3]);
+  grad.addColorStop(1, stops[4]);
+  const isFace = item.kind === 'face';
+  const isStick = item.kind === 'stick';
+  if (isFace) faceGrad = grad;
+  if (isStick) stickGrad = grad;
+  return {
+    path2d: new Path2D(item.d),
+    grad,
+    lw: item.lw,
+    isFace,
+    isStick
+  };
+});
+
+function updateColorBuffer() {
+  bufferCtx.clearRect(0, 0, 2400, 1792);
+  const isDeformed = Math.abs(ox + ix) > 0.01 || Math.abs(oy + iy) > 0.01 || Math.abs(iRot) > 0.001;
+  for (const item of fillItems) {
+    bufferCtx.fillStyle = item.grad;
+    bufferCtx.strokeStyle = item.grad;
+    bufferCtx.lineWidth = item.lw;
+    if (isDeformed && item.isFace) {
+      bufferCtx.fill(HANDS_PATH);
+      bufferCtx.stroke(HANDS_PATH);
+      bufferCtx.save();
+      bufferCtx.beginPath();
+      bufferCtx.rect(0, 0, 2400, 635);
+      bufferCtx.clip();
+      bufferCtx.fill(item.path2d);
+      bufferCtx.stroke(item.path2d);
+      bufferCtx.restore();
+    } else if (isDeformed && item.isStick) {
+      bufferCtx.fill(CROSS_PATH);
+      bufferCtx.stroke(CROSS_PATH);
+    } else {
+      bufferCtx.fill(item.path2d);
+      bufferCtx.stroke(item.path2d);
+    }
+  }
+}
+updateColorBuffer();
+
+const uiEl = document.getElementById('ui');
+const replayBtn = document.getElementById('rp');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let prog = 0;
+let lastTime = null;
+let lastBufDef = false;
+let lastDrawnProg = -1;
+let lastDrawnDx = 999;
+let lastDrawnDy = 999;
+let lastDrawnRot = 999;
+
+function drawStrokePoints(pts, clipUnderSkirt) {
+  const count = pts.length;
+  const radii = new Float32Array(count);
+  if (clipUnderSkirt) {
+    ctx.save();
+    ctx.clip(SKIRT_CLIP, 'evenodd');
+  }
+  ctx.beginPath();
+  for (let i = 0; i < count; i++) {
+    const r = 2.7 + Math.pow(pts[i].pressure, 1.15) * 4.8;
+    radii[i] = r;
+    ctx.moveTo(pts[i].x + r, pts[i].y);
+    ctx.arc(pts[i].x, pts[i].y, r, 0, Math.PI * 2);
+  }
+  for (let i = 1; i < count; i++) {
+    const p0 = pts[i - 1];
+    const p1 = pts[i];
+    const dx = p1.x - p0.x;
+    const dy = p1.y - p0.y;
+    const segLen = Math.hypot(dx, dy);
+    if (segLen < 0.05) continue;
+    const nx = -dy / segLen;
+    const ny = dx / segLen;
+    const r0 = radii[i - 1];
+    const r1 = radii[i];
+    ctx.moveTo(p0.x - nx * r0, p0.y - ny * r0);
+    ctx.lineTo(p1.x - nx * r1, p1.y - ny * r1);
+    ctx.lineTo(p1.x + nx * r1, p1.y + ny * r1);
+    ctx.lineTo(p0.x + nx * r0, p0.y + ny * r0);
+    ctx.closePath();
+  }
+  ctx.fill();
+  if (clipUnderSkirt) {
+    ctx.restore();
+  }
+}
+
+function renderFrame(currentProg) {
+  const strokeProg = currentProg >= 0.999 ? 1 : currentProg <= 0.72 ? currentProg / 0.72 : 1;
+  const colorProg = currentProg >= 0.999 ? 1 : currentProg <= 0.72 ? 0 : (currentProg - 0.72) / 0.28;
+
+  const bgGrad = ctx.createRadialGradient(1200, 860, 240, 1200, 896, 1800);
+  bgGrad.addColorStop(0, '#EDE6D9');
+  bgGrad.addColorStop(1, '#DFD6C5');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, 2400, 1792);
+
+  if (colorProg > 0) {
+    ctx.save();
+    if (colorProg < 0.999) {
+      const ease = colorProg < 0.5 ? 2 * colorProg * colorProg : 1 - Math.pow(-2 * colorProg + 2, 2) / 2;
+      const sweepFront = 320 + ease * 2150;
+      const nx = Math.cos((35 * Math.PI) / 180);
+      const ny = Math.sin((35 * Math.PI) / 180);
+      const tx = -ny;
+      const ty = nx;
+      ctx.beginPath();
+      ctx.moveTo(-tx * 2400, -ty * 2400);
+      ctx.lineTo(tx * 2400, ty * 2400);
+      ctx.lineTo(nx * sweepFront + tx * 2400, ny * sweepFront + ty * 2400);
+      ctx.lineTo(nx * sweepFront - tx * 2400, ny * sweepFront - ty * 2400);
+      ctx.closePath();
+      ctx.clip();
+    }
+    ctx.drawImage(colorBuffer, 0, 0);
+    ctx.restore();
+  }
+
+  ctx.fillStyle = '#18181b';
+  const isDeformed = Math.abs(ox + ix) > 0.01 || Math.abs(oy + iy) > 0.01 || Math.abs(iRot) > 0.001;
+
+  if (!isDeformed) {
+    for (let idx = 0; idx < strokes.length; idx++) {
+      const s = strokes[idx];
+      if (strokeProg <= s.s0 && strokeProg < 1) break;
+      const localProg =
+        strokeProg >= 1 ? 1 : Math.max(0, Math.min(1, (strokeProg - s.s0) / Math.max(0.0001, s.s1 - s.s0)));
+      if (localProg <= 0) continue;
+      const visibleCount = Math.max(2, Math.ceil(s.points.length * localProg));
+      drawStrokePoints(s.points.slice(0, visibleCount), idx >= 41 && idx <= 44);
+    }
+  } else {
+    const lastIdx = strokes.length - 1;
+    const shift = getStickShift();
+    for (let idx = 16; idx < lastIdx; idx++) {
+      drawStrokePoints(strokes[idx].points, idx >= 41 && idx <= 44);
+    }
+    ctx.save();
+    ctx.translate(STICK_PIVOT_X + shift.x, STICK_PIVOT_Y + shift.y);
+    ctx.rotate(iRot);
+    ctx.translate(-STICK_PIVOT_X, -STICK_PIVOT_Y);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = stickGrad;
+    ctx.strokeStyle = stickGrad;
+    ctx.fill(STICK_PATH);
+    ctx.stroke(STICK_PATH);
+    ctx.restore();
+
+    ctx.fillStyle = '#18181b';
+    drawStrokePoints(
+      strokes[lastIdx].points.map((pt) => {
+        const tp = transformStickPoint(pt.x, pt.y, shift);
+        return { x: tp.x, y: tp.y, pressure: pt.pressure };
+      }),
+      false
+    );
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 630, 2400, 1162);
+    ctx.clip();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 1.5;
+    const facePoly = getFacePolygon();
+    ctx.fillStyle = faceGrad;
+    ctx.strokeStyle = faceGrad;
+    ctx.fill(facePoly);
+    ctx.stroke(facePoly);
+    ctx.restore();
+
+    ctx.fillStyle = '#18181b';
+    drawStrokePoints(
+      strokes[0].points.map((pt) => {
+        const dp = deformPoint(pt.x, pt.y);
+        return { x: dp.x, y: dp.y, pressure: pt.pressure };
+      }),
+      false
+    );
+
+    for (let idx = 1; idx <= 15; idx++) {
+      if (idx === 8) {
+        drawStrokePoints(
+          strokes[idx].points.map((pt) => {
+            const dp = deformPoint(pt.x, pt.y, 0.65);
+            return { x: dp.x, y: dp.y, pressure: pt.pressure };
+          }),
+          false
+        );
+      } else {
+        drawStrokePoints(strokes[idx].points, false);
+      }
+    }
+  }
+}
+
+function tick(now) {
+  if (lastTime === null) lastTime = now;
+  const dt = Math.min(50, now - lastTime);
+  prog = Math.min(1, prog + dt / 10800);
+  lastTime = now;
+  dragVel *= 0.82;
+
+  if (!dragging && (Math.abs(ox) > 0.05 || Math.abs(oy) > 0.05 || Math.abs(vx) > 0.05 || Math.abs(vy) > 0.05)) {
+    vx = (vx - ox * 0.22) * 0.8;
+    vy = (vy - oy * 0.22) * 0.8;
+    ox += vx;
+    oy += vy;
+    if (Math.abs(ox) <= 0.05 && Math.abs(oy) <= 0.05 && Math.abs(vx) <= 0.05 && Math.abs(vy) <= 0.05) {
+      ox = 0;
+      oy = 0;
+      vx = 0;
+      vy = 0;
+    }
+  }
+
+  if (prog >= 1 && !dragging && Math.hypot(ox, oy) < 2.5) {
+    stepIdle(dt * 0.001);
+  } else {
+    idleAct = null;
+    idlePause = 0.8 + Math.random() * 1.2;
+    ix *= 0.8;
+    iy *= 0.8;
+    iRot *= 0.8;
+    if (Math.abs(ix) < 0.01) ix = 0;
+    if (Math.abs(iy) < 0.01) iy = 0;
+    if (Math.abs(iRot) < 0.001) iRot = 0;
+  }
+
+  const curDx = ox + ix;
+  const curDy = oy + iy;
+  const curDef = Math.abs(curDx) > 0.01 || Math.abs(curDy) > 0.01 || Math.abs(iRot) > 0.001;
+  if (curDef !== lastBufDef) {
+    lastBufDef = curDef;
+    updateColorBuffer();
+  }
+
+  const needsRedraw =
+    Math.abs(prog - lastDrawnProg) > 0.0001 ||
+    Math.abs(curDx - lastDrawnDx) > 0.01 ||
+    Math.abs(curDy - lastDrawnDy) > 0.01 ||
+    Math.abs(iRot - lastDrawnRot) > 0.0002;
+
+  if (needsRedraw) {
+    lastDrawnProg = prog;
+    lastDrawnDx = curDx;
+    lastDrawnDy = curDy;
+    lastDrawnRot = iRot;
+    renderFrame(prog);
+  }
+
+  updateAudioFrame(prog);
+  if (prog >= 1) uiEl.classList.add('show');
+  rafId = requestAnimationFrame(tick);
+}
+rafId = requestAnimationFrame(tick);
+
+function getCanvasPoint(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scale = Math.min(rect.width / 2400, rect.height / 1792);
+  return {
+    x: (e.clientX - rect.left - (rect.width - 2400 * scale) / 2) / scale,
+    y: (e.clientY - rect.top - (rect.height - 1792 * scale) / 2) / scale
+  };
+}
+
+canvas.onpointerdown = (e) => {
+  initAudio();
+  if (prog < 1) return;
+  const pt = getCanvasPoint(e);
+  const shift = getStickShift();
+  if (Math.hypot(pt.x - (925 + shift.x), pt.y - (830 + shift.y)) < 175) {
+    ox += ix;
+    oy += iy;
+    ix = 0;
+    iy = 0;
+    iRot = 0;
+    idleAct = null;
+    dragging = true;
+    dragStart = { x: pt.x - ox, y: pt.y - oy };
+    lastDragX = pt.x;
+    lastDragY = pt.y;
+    dragVel = 0;
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+  }
+};
+
+canvas.onpointermove = (e) => {
+  if (prog < 1) return;
+  const pt = getCanvasPoint(e);
+  const shift = getStickShift();
+  if (!dragging) {
+    const nearCheek = Math.hypot(pt.x - (925 + shift.x), pt.y - (830 + shift.y)) < 175;
+    canvas.style.cursor = nearCheek ? 'grab' : 'default';
+    return;
+  }
+  dragVel = Math.hypot(pt.x - lastDragX, pt.y - lastDragY);
+  lastDragX = pt.x;
+  lastDragY = pt.y;
+  const mapped = softMapOffset(pt.x - dragStart.x, pt.y - dragStart.y);
+  ox = mapped.x;
+  oy = mapped.y;
+};
+
+canvas.onpointerup = canvas.onpointercancel = () => {
+  if (dragging) {
+    dragging = false;
+    canvas.style.cursor = 'grab';
+  }
+};
+
+replayBtn.onclick = () => {
+  initAudio();
+  cancelAnimationFrame(rafId);
+  uiEl.classList.remove('show');
+  ox = 0;
+  oy = 0;
+  vx = 0;
+  vy = 0;
+  ix = 0;
+  iy = 0;
+  iRot = 0;
+  idleAct = null;
+  idlePause = 0.9;
+  prevIdleStep = -1;
+  prevIdleType = null;
+  lastBufDef = false;
+  lastDrawnProg = -1;
+  updateColorBuffer();
+  prog = 0;
+  lastTime = null;
+  rafId = requestAnimationFrame(tick);
+};
+</script>
+</body>
+</html>
