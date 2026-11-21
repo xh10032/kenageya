@@ -1,0 +1,34 @@
+{
+  "name": "tohsaka",
+  "version": "1.0.0",
+  "description": "Graceful time management utility that always triggers 60 minutes ahead of target deadlines.",
+  "main": "index.js",
+  "bin": {
+    "tohsaka": "cli.js"
+  },
+  "files": [
+    "index.js",
+    "cli.js"
+  ],
+  "keywords": [
+    "tohsaka",
+    "timer",
+    "alarm",
+    "schedule",
+    "clock",
+    "graceful"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xh10032/kenageya.git",
+    "directory": "npm/tohsaka"
+  },
+  "homepage": "https://github.com/xh10032/kenageya#readme",
+  "bugs": {
+    "url": "https://github.com/xh10032/kenageya/issues"
+  },
+  "license": "MIT"
+}
