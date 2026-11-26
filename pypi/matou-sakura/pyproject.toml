@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matou-sakura"
+version = "1.0.0"
+description = "Sketch of Sakura"
+readme = { file = "README.md", content-type = "text/markdown; charset=UTF-8" }
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["matou-sakura", "sketch", "canvas"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/xh10032/kenageya"
+Repository = "https://github.com/xh10032/kenageya"
+Issues = "https://github.com/xh10032/kenageya/issues"
+
+[project.scripts]
+matou-sakura = "matou_sakura:main"
+
+[tool.setuptools]
+packages = ["matou_sakura"]
+
+[tool.setuptools.package-data]
+matou_sakura = ["index.html"]

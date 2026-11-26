@@ -12,6 +12,7 @@ on:
           - tohsaka-rin
           - tohsaka
           - matou
+          - matou-sakura
       target:
         description: '2. 选择发布目标平台 (防单边报错重跑撞车，可单独补发某一边)'
         required: true

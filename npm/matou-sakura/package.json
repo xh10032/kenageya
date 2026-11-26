@@ -1,0 +1,31 @@
+{
+  "name": "matou-sakura",
+  "version": "1.0.0",
+  "description": "Sketch of Sakura",
+  "bin": {
+    "matou-sakura": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "index.html"
+  ],
+  "main": "cli.js",
+  "keywords": [
+    "matou-sakura",
+    "sketch",
+    "canvas"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xh10032/kenageya.git",
+    "directory": "npm/matou-sakura"
+  },
+  "homepage": "https://github.com/xh10032/kenageya#readme",
+  "bugs": {
+    "url": "https://github.com/xh10032/kenageya/issues"
+  },
+  "license": "MIT"
+}
